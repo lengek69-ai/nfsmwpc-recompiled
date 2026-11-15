@@ -63,6 +63,7 @@ jobs:
           grep -q '#define RECOMP_HOOK' pcrecomp/runtime/recomp32/recomp_types.h
           python3 nfsmw/scripts/patch_pcrecomp_lifter.py pcrecomp/tools/lift/lift32.py
           grep -q 'LOOPcc tests ZF' pcrecomp/tools/lift/lift32.py
+          python3 -m py_compile nfsmw/scripts/patch_pcrecomp_lifter.py nfsmw/scripts/run_lift.py pcrecomp/tools/lift/lift32.py
           echo "Applied shared pcrecomp patches and Android branch-safety fix."
 
       - name: Checkout pinned DXVK native source
