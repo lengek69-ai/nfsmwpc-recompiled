@@ -43,13 +43,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sp00nznet/pcrecomp
+          ref: 35548b8d0fd8aa853da67edcf7cd6134f6b9cdc7
           path: pcrecomp
 
       - name: Checkout shared NFSU2 Android infrastructure
         uses: actions/checkout@v4
         with:
           repository: codepdbh/nfsu2-recompiled
-          path: nfsu2-recompiled
+          path: nfsu2-recompiled      
+      - name: Apply shared pcrecomp patches
+        run: |
+          set -euo pipefail
+          git -C pcrecomp -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            am "$GITHUB_WORKSPACE"/nfsu2-recompiled/patches/pcrecomp/*.patch
+          grep -q 'hook_sites: set' pcrecomp/tools/lift/lift32.py
+          grep -q '#define RECOMP_HOOK' pcrecomp/runtime/recomp32/recomp_types.h
+          echo "Applied and verified the shared pcrecomp patch series."
 
       - name: Checkout pinned DXVK native source
         uses: actions/checkout@v4
