@@ -3,8 +3,8 @@ name: Build Android APKs
 on:
   workflow_dispatch:
     inputs:
-      generated_sources_url:
-        description: "HTTPS URL to a ZIP containing src/recomp/gen, gen_server and gen_d3dx"
+      original_binaries_url:
+        description: "HTTPS URL to a ZIP containing the original speed.exe, server.dll and d3dx9_26.dll"
         required: true
         type: string
       abk_inputs_url:
@@ -62,35 +62,133 @@ jobs:
           ref: c8dc91fabd00cac11d697ccf07426e798393cd40
           path: dxvk-native
 
-      - name: Download generated game sources
+      - name: Download original game binaries and prepare Python tools
         env:
-          SOURCES_URL: ${{ inputs.generated_sources_url }}
-          SOURCES_TOKEN: ${{ secrets.ANDROID_BUILD_INPUTS_TOKEN }}
+          BINARIES_URL: ${{ inputs.original_binaries_url }}
+          BINARIES_TOKEN: ${{ secrets.ANDROID_BUILD_INPUTS_TOKEN }}
         run: |
           set -euo pipefail
-          case "$SOURCES_URL" in
+          case "$BINARIES_URL" in
             https://*) ;;
-            *) echo "::error::generated_sources_url must use HTTPS"; exit 1 ;;
+            *) echo "::error::original_binaries_url must use HTTPS"; exit 1 ;;
           esac
-          if [ -n "${SOURCES_TOKEN:-}" ]; then
+          if [ -n "${BINARIES_TOKEN:-}" ]; then
             curl --fail --location --retry 3 --retry-delay 2 \
-              -H "Authorization: Bearer $SOURCES_TOKEN" \
-              "$SOURCES_URL" -o generated-sources.zip
+              -H "Authorization: Bearer $BINARIES_TOKEN" \
+              "$BINARIES_URL" -o original-binaries.zip
           else
             curl --fail --location --retry 3 --retry-delay 2 \
-              "$SOURCES_URL" -o generated-sources.zip
+              "$BINARIES_URL" -o original-binaries.zip
           fi
-          unzip -q generated-sources.zip -d generated-sources
-          for dir in gen gen_server gen_d3dx; do
-            if [ ! -d "generated-sources/src/recomp/$dir" ]; then
-              echo "::error::Archive is missing src/recomp/$dir"
+          unzip -q original-binaries.zip -d original-binaries
+
+          speed_exe="$(find original-binaries -type f -iname speed.exe -print -quit)"
+          server_dll="$(find original-binaries -type f -iname server.dll -print -quit)"
+          d3dx_dll="$(find original-binaries -type f -iname d3dx9_26.dll -print -quit)"
+          for input in "$speed_exe" "$server_dll" "$d3dx_dll"; do
+            if [ -z "$input" ] || [ ! -s "$input" ]; then
+              echo "::error::Original binary ZIP must contain non-empty speed.exe, server.dll and d3dx9_26.dll"
               exit 1
             fi
           done
-          mkdir -p nfsmw/src/recomp
-          cp -a generated-sources/src/recomp/gen nfsmw/src/recomp/
-          cp -a generated-sources/src/recomp/gen_server nfsmw/src/recomp/
-          cp -a generated-sources/src/recomp/gen_d3dx nfsmw/src/recomp/
+
+          speed_exe="$(realpath "$speed_exe")"
+          server_dll="$(realpath "$server_dll")"
+          d3dx_dll="$(realpath "$d3dx_dll")"
+
+          expected_speed_sha="80774c2e5d619b4f120b48d4462896fd504c263399d203a238769cffde1d253c"
+          actual_speed_sha="$(sha256sum "$speed_exe" | cut -d' ' -f1)"
+          if [ "$actual_speed_sha" != "$expected_speed_sha" ]; then
+            echo "::error::speed.exe does not match the repository reference executable"
+            exit 1
+          fi
+
+          python3 -m venv "$RUNNER_TEMP/nfsmw-lift-venv"
+          nfsmw_python="$RUNNER_TEMP/nfsmw-lift-venv/bin/python"
+          "$nfsmw_python" -m pip install --disable-pip-version-check capstone pefile
+          "$nfsmw_python" - "$server_dll" "$d3dx_dll" <<'PY'
+          import pefile
+          import sys
+
+          expected = {
+              sys.argv[1]: ("server.dll", 0x10000000, 0x0006F000),
+              sys.argv[2]: ("d3dx9_26.dll", 0x00400000, 0x0024A000),
+          }
+          for path, (name, image_base, image_size) in expected.items():
+              pe = pefile.PE(path)
+              if pe.FILE_HEADER.Machine != 0x14C or pe.OPTIONAL_HEADER.Magic != 0x10B:
+                  raise SystemExit(f"{name}: expected x86 PE32")
+              if not pe.FILE_HEADER.Characteristics & 0x2000:
+                  raise SystemExit(f"{name}: expected a DLL")
+              if pe.OPTIONAL_HEADER.ImageBase != image_base:
+                  raise SystemExit(f"{name}: unexpected preferred image base")
+              if pe.OPTIONAL_HEADER.SizeOfImage != image_size:
+                  raise SystemExit(f"{name}: unexpected SizeOfImage")
+              if not getattr(pe, "DIRECTORY_ENTRY_BASERELOC", None):
+                  raise SystemExit(f"{name}: base relocations are required")
+              print(f"Validated {name}: base=0x{image_base:08x}, image_size=0x{image_size:x}")
+          PY
+
+          {
+            echo "NFSMW_SPEED_EXE=$speed_exe"
+            echo "NFSMW_SERVER_DLL=$server_dll"
+            echo "NFSMW_D3DX_DLL=$d3dx_dll"
+            echo "NFSMW_PYTHON=$nfsmw_python"
+          } >> "$GITHUB_ENV"
+
+      - name: Generate main executable, server and D3DX recompilation sources
+        working-directory: nfsmw
+        run: |
+          set -euo pipefail
+          PY="$NFSMW_PYTHON"
+          mkdir -p work/d3dx
+
+          echo "== Analyze speed.exe =="
+          "$PY" scripts/analyze_binary.py "$NFSMW_SPEED_EXE" work
+
+          echo "== Discover data-pointer function seeds =="
+          "$PY" scripts/data_seeds.py work/speed.analysis.exe work/seeds_data.json
+
+          echo "== Build preliminary catalog for switch/code-immediate discovery =="
+          "$PY" scripts/run_lift.py catalog \
+            work/speed.analysis.exe work/seeds_data.json work/catalog_data.json
+
+          echo "== Discover switch arms and code-address immediates =="
+          "$PY" scripts/code_seeds.py \
+            work/speed.analysis.exe work/catalog_data.json work/seeds_code.json \
+            --merge work/seeds_data.json
+
+          echo "== Build final speed.exe catalog and lift =="
+          "$PY" scripts/run_lift.py catalog \
+            work/speed.analysis.exe work/seeds_code.json work/catalog.json
+          "$PY" scripts/run_lift.py lift \
+            work/speed.analysis.exe work/catalog.json src/recomp/gen
+
+          echo "== Prepare and lift server.dll =="
+          "$PY" scripts/prepare_server.py "$NFSMW_SERVER_DLL"
+
+          echo "== Prepare and lift d3dx9_26.dll =="
+          "$PY" scripts/prepare_module.py \
+            "$NFSMW_D3DX_DLL" 0x00b00000 \
+            work/d3dx/d3dx-relocated.dll work/d3dx/seeds.json
+          "$PY" scripts/run_lift.py catalog \
+            work/d3dx/d3dx-relocated.dll work/d3dx/seeds.json \
+            work/d3dx/catalog.json --seeds-only
+          "$PY" scripts/run_lift.py lift \
+            work/d3dx/d3dx-relocated.dll work/d3dx/catalog.json \
+            src/recomp/gen_d3dx --prefix d3dx_
+
+          echo "== Verify generated source sets =="
+          test -s src/recomp/gen/recomp_funcs.h
+          test -s src/recomp/gen/recomp_dispatch.c
+          compgen -G 'src/recomp/gen/recomp_*.c' >/dev/null
+          test -s src/recomp/gen_server/server_recomp_funcs.h
+          test -s src/recomp/gen_server/server_recomp_dispatch.c
+          compgen -G 'src/recomp/gen_server/server_recomp_*.c' >/dev/null
+          test -s src/recomp/gen_d3dx/d3dx_recomp_funcs.h
+          test -s src/recomp/gen_d3dx/d3dx_recomp_dispatch.c
+          compgen -G 'src/recomp/gen_d3dx/d3dx_recomp_*.c' >/dev/null
+          echo "All three recompilation source sets were generated."
 
       - name: Generate lifted ABK sound-bank module
         env:
