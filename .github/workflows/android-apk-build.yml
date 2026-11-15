@@ -277,7 +277,14 @@ jobs:
             exit 1
           }
           test -d ../nfsu2-recompiled/ports/dxvk_android
-          test -d ../nfsu2-recompiled/third_party/libadrenotools
+          test -f ../nfsu2-recompiled/third_party/libadrenotools/CMakeLists.txt || {
+            echo "::error::libadrenotools submodule is missing. Ensure the shared NFSU2 checkout uses submodules: recursive."
+            exit 1
+          }
+          test -f ../nfsu2-recompiled/third_party/libadrenotools/lib/linkernsbypass/CMakeLists.txt || {
+            echo "::error::liblinkernsbypass nested submodule is missing."
+            exit 1
+          }
 
       - name: Build APK
         working-directory: nfsmw/android
