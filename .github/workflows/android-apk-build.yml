@@ -61,7 +61,9 @@ jobs:
             am "$GITHUB_WORKSPACE"/nfsu2-recompiled/patches/pcrecomp/*.patch
           grep -q 'hook_sites: set' pcrecomp/tools/lift/lift32.py
           grep -q '#define RECOMP_HOOK' pcrecomp/runtime/recomp32/recomp_types.h
-          echo "Applied and verified the shared pcrecomp patch series."
+          python3 nfsmw/scripts/patch_pcrecomp_lifter.py pcrecomp/tools/lift/lift32.py
+          grep -q 'LOOPcc tests ZF' pcrecomp/tools/lift/lift32.py
+          echo "Applied shared pcrecomp patches and Android branch-safety fix."
 
       - name: Checkout pinned DXVK native source
         uses: actions/checkout@v4
