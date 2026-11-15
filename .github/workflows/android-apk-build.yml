@@ -3,12 +3,8 @@ name: Build Android APKs
 on:
   workflow_dispatch:
     inputs:
-      original_binaries_url:
-        description: "HTTPS URL to a ZIP containing the original speed.exe, server.dll and d3dx9_26.dll"
-        required: true
-        type: string
-      abk_inputs_url:
-        description: "HTTPS URL to a ZIP containing analysis.dll, seeds.json and blocks.c from scripts/abk_module.py"
+      build_inputs_url:
+        description: "HTTPS URL to a ZIP containing original-binaries/ and abk-inputs/"
         required: true
         type: string
       abi:
@@ -62,32 +58,35 @@ jobs:
           ref: c8dc91fabd00cac11d697ccf07426e798393cd40
           path: dxvk-native
 
-      - name: Download original game binaries and prepare Python tools
+      - name: Download build inputs and prepare Python tools
         env:
-          BINARIES_URL: ${{ inputs.original_binaries_url }}
-          BINARIES_TOKEN: ${{ secrets.ANDROID_BUILD_INPUTS_TOKEN }}
+          BUILD_INPUTS_URL: ${{ inputs.build_inputs_url }}
+          BUILD_INPUTS_TOKEN: ${{ secrets.ANDROID_BUILD_INPUTS_TOKEN }}
         run: |
           set -euo pipefail
-          case "$BINARIES_URL" in
+          case "$BUILD_INPUTS_URL" in
             https://*) ;;
-            *) echo "::error::original_binaries_url must use HTTPS"; exit 1 ;;
+            *) echo "::error::build_inputs_url must use HTTPS"; exit 1 ;;
           esac
-          if [ -n "${BINARIES_TOKEN:-}" ]; then
+          if [ -n "${BUILD_INPUTS_TOKEN:-}" ]; then
             curl --fail --location --retry 3 --retry-delay 2 \
-              -H "Authorization: Bearer $BINARIES_TOKEN" \
-              "$BINARIES_URL" -o original-binaries.zip
+              -H "Authorization: Bearer $BUILD_INPUTS_TOKEN" \
+              "$BUILD_INPUTS_URL" -o build-inputs.zip
           else
             curl --fail --location --retry 3 --retry-delay 2 \
-              "$BINARIES_URL" -o original-binaries.zip
+              "$BUILD_INPUTS_URL" -o build-inputs.zip
           fi
-          unzip -q original-binaries.zip -d original-binaries
+          unzip -q build-inputs.zip -d build-inputs
 
-          speed_exe="$(find original-binaries -type f -iname speed.exe -print -quit)"
-          server_dll="$(find original-binaries -type f -iname server.dll -print -quit)"
-          d3dx_dll="$(find original-binaries -type f -iname d3dx9_26.dll -print -quit)"
-          for input in "$speed_exe" "$server_dll" "$d3dx_dll"; do
+          speed_exe="$(find build-inputs -type f -path '*/original-binaries/*' -iname speed.exe -print -quit)"
+          server_dll="$(find build-inputs -type f -path '*/original-binaries/*' -iname server.dll -print -quit)"
+          d3dx_dll="$(find build-inputs -type f -path '*/original-binaries/*' -iname d3dx9_26.dll -print -quit)"
+          analysis_dll="$(find build-inputs -type f -path '*/abk-inputs/*' -name analysis.dll -print -quit)"
+          seeds_json="$(find build-inputs -type f -path '*/abk-inputs/*' -name seeds.json -print -quit)"
+          blocks_c="$(find build-inputs -type f -path '*/abk-inputs/*' -name blocks.c -print -quit)"
+          for input in "$speed_exe" "$server_dll" "$d3dx_dll" "$analysis_dll" "$seeds_json" "$blocks_c"; do
             if [ -z "$input" ] || [ ! -s "$input" ]; then
-              echo "::error::Original binary ZIP must contain non-empty speed.exe, server.dll and d3dx9_26.dll"
+              echo "::error::Build input ZIP must contain speed.exe, server.dll, d3dx9_26.dll, and ABK analysis.dll, seeds.json and blocks.c in their respective folders"
               exit 1
             fi
           done
@@ -95,6 +94,9 @@ jobs:
           speed_exe="$(realpath "$speed_exe")"
           server_dll="$(realpath "$server_dll")"
           d3dx_dll="$(realpath "$d3dx_dll")"
+          analysis_dll="$(realpath "$analysis_dll")"
+          seeds_json="$(realpath "$seeds_json")"
+          blocks_c="$(realpath "$blocks_c")"
 
           expected_speed_sha="80774c2e5d619b4f120b48d4462896fd504c263399d203a238769cffde1d253c"
           actual_speed_sha="$(sha256sum "$speed_exe" | cut -d' ' -f1)"
@@ -106,7 +108,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/nfsmw-lift-venv"
           nfsmw_python="$RUNNER_TEMP/nfsmw-lift-venv/bin/python"
           "$nfsmw_python" -m pip install --disable-pip-version-check capstone pefile
-          "$nfsmw_python" - "$server_dll" "$d3dx_dll" <<'PY'
+          "$nfsmw_python" - "$server_dll" "$d3dx_dll" "$analysis_dll" <<'PY'
           import pefile
           import sys
 
@@ -127,12 +129,20 @@ jobs:
               if not getattr(pe, "DIRECTORY_ENTRY_BASERELOC", None):
                   raise SystemExit(f"{name}: base relocations are required")
               print(f"Validated {name}: base=0x{image_base:08x}, image_size=0x{image_size:x}")
+
+          abk = pefile.PE(sys.argv[3])
+          if abk.FILE_HEADER.Machine != 0x14C or abk.OPTIONAL_HEADER.Magic != 0x10B:
+              raise SystemExit("ABK analysis.dll: expected x86 PE32")
+          print("Validated ABK analysis.dll: x86 PE32")
           PY
 
           {
             echo "NFSMW_SPEED_EXE=$speed_exe"
             echo "NFSMW_SERVER_DLL=$server_dll"
             echo "NFSMW_D3DX_DLL=$d3dx_dll"
+            echo "NFSMW_ABK_ANALYSIS_DLL=$analysis_dll"
+            echo "NFSMW_ABK_SEEDS_JSON=$seeds_json"
+            echo "NFSMW_ABK_BLOCKS_C=$blocks_c"
             echo "NFSMW_PYTHON=$nfsmw_python"
           } >> "$GITHUB_ENV"
 
@@ -191,34 +201,11 @@ jobs:
           echo "All three recompilation source sets were generated."
 
       - name: Generate lifted ABK sound-bank module
-        env:
-          ABK_INPUTS_URL: ${{ inputs.abk_inputs_url }}
-          ABK_INPUTS_TOKEN: ${{ secrets.ANDROID_BUILD_INPUTS_TOKEN }}
         run: |
           set -euo pipefail
-          case "$ABK_INPUTS_URL" in
-            https://*) ;;
-            *) echo "::error::abk_inputs_url must use HTTPS"; exit 1 ;;
-          esac
-          if [ -n "${ABK_INPUTS_TOKEN:-}" ]; then
-            curl --fail --location --retry 3 --retry-delay 2 \
-              -H "Authorization: Bearer $ABK_INPUTS_TOKEN" \
-              "$ABK_INPUTS_URL" -o abk-inputs.zip
-          else
-            curl --fail --location --retry 3 --retry-delay 2 \
-              "$ABK_INPUTS_URL" -o abk-inputs.zip
-          fi
-          unzip -q abk-inputs.zip -d abk-inputs
-
-          analysis_dll="$(find abk-inputs -type f -name analysis.dll -print -quit)"
-          seeds_json="$(find abk-inputs -type f -name seeds.json -print -quit)"
-          blocks_c="$(find abk-inputs -type f -name blocks.c -print -quit)"
-          for input in "$analysis_dll" "$seeds_json" "$blocks_c"; do
-            if [ -z "$input" ] || [ ! -s "$input" ]; then
-              echo "::error::ABK input ZIP must contain non-empty analysis.dll, seeds.json and blocks.c"
-              exit 1
-            fi
-          done
+          analysis_dll="$NFSMW_ABK_ANALYSIS_DLL"
+          seeds_json="$NFSMW_ABK_SEEDS_JSON"
+          blocks_c="$NFSMW_ABK_BLOCKS_C"
 
           mkdir -p nfsmw/work/abk nfsmw/src/recomp/gen_abk
           cp "$blocks_c" nfsmw/src/recomp/gen_abk/abk_blocks.c
