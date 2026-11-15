@@ -20,7 +20,7 @@ config/ is this project's own (overrides, exclude, hooks for Speed.exe).
 
 Everything written here is derived from the game binary and is gitignored.
 """
-import json, os, sys, time, collections
+import json, os, re, sys, time, collections
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PCRECOMP = os.environ.get("PCRECOMP", os.path.normpath(os.path.join(HERE, "..", "..", "pcrecomp")))
@@ -162,6 +162,21 @@ def read_va_list(path):
     return out
 
 
+
+def validate_local_gotos(code, address):
+    """Reject CFG/lifter mismatches before emitting invalid generated C."""
+    labels = set(re.findall(r"(?m)^\\s*(L_[0-9A-Fa-f]{8})\\s*:", code))
+    targets = set(re.findall(r"\\bgoto\\s+(L_[0-9A-Fa-f]{8})\\s*;", code))
+    missing = sorted(targets - labels)
+    if missing:
+        formatted = ", ".join(missing[:12])
+        more = f" (+{len(missing) - 12} more)" if len(missing) > 12 else ""
+        raise RuntimeError(
+            f"Function 0x{address:08X} has unresolved local goto label(s): "
+            f"{formatted}{more}"
+        )
+
+
 def cmd_lift(exe, catalog, outdir, split=400, names_path=None, prefix="", extra_exclude=None):
     import pefile
     from mw_lifter import Lifter
@@ -237,6 +252,7 @@ def cmd_lift(exe, catalog, outdir, split=400, names_path=None, prefix="", extra_
             failed.append((a, repr(ex)))
             code = (f"/* LIFT FAILED: {ex!r} */\n"
                     f"void sub_{a:08X}(void) {{ RECOMP_UNIMPL(0x{a:08X}u, \"lift failed\"); }}")
+        validate_local_gotos(code, a)
         for line in code.splitlines():
             if "RECOMP_UNIMPL(" in line:
                 key = line.split('RECOMP_UNIMPL(', 1)[1].split('"')[1].split()[0] if '"' in line else "?"
