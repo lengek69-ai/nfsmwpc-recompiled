@@ -165,8 +165,8 @@ def read_va_list(path):
 
 def validate_local_gotos(code, address):
     """Reject CFG/lifter mismatches before emitting invalid generated C."""
-    labels = set(re.findall(r"(?m)^\\s*(L_[0-9A-Fa-f]{8})\\s*:", code))
-    targets = set(re.findall(r"\\bgoto\\s+(L_[0-9A-Fa-f]{8})\\s*;", code))
+    labels = set(re.findall(r"(?m)^[ \t]*(L_[0-9A-Fa-f]{8})[ \t]*:", code))
+    targets = set(re.findall(r"\bgoto[ \t]+(L_[0-9A-Fa-f]{8})[ \t]*;", code))
     missing = sorted(targets - labels)
     if missing:
         formatted = ", ".join(missing[:12])
