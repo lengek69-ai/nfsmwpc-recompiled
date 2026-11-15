@@ -71,7 +71,7 @@ list(APPEND ANDROID_GEN_SOURCES ${ABK_GEN_SOURCES})
 set_property(GLOBAL PROPERTY JOB_POOLS guest_compile=4)
 add_library(nfs_guest OBJECT ${ANDROID_GEN_SOURCES})
 set_property(TARGET nfs_guest PROPERTY JOB_POOL_COMPILE guest_compile)
-target_include_directories(nfs_guest PRIVATE "${PCRECOMP}/runtime/recomp32" "${GEN_DIR}" "${SERVER_GEN_DIR}" "${NFS_ROOT}/src/runtime")
+target_include_directories(nfs_guest PRIVATE "${PCRECOMP}/runtime/recomp32" "${GEN_DIR}" "${SERVER_GEN_DIR}" "${D3DX_GEN_DIR}" "${ABK_GEN_DIR}" "${NFS_ROOT}/src/runtime")
 # RECOMP_LOCAL_REGS: guest registers live in locals of each lifted function
 # (written back at every call and return) so they stay in ARM64 registers.
 # RECOMP_MEM_QUAL=: guest memory accesses are not volatile; -fno-strict-aliasing
