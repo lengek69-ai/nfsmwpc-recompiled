@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       generated_sources_url:
-        description: "HTTPS URL to a ZIP containing src/recomp/gen, gen_server, gen_d3dx and gen_abk"
+        description: "HTTPS URL to a ZIP containing src/recomp/gen, gen_server and gen_d3dx"
+        required: true
+        type: string
+      abk_inputs_url:
+        description: "HTTPS URL to a ZIP containing analysis.dll, seeds.json and blocks.c from scripts/abk_module.py"
         required: true
         type: string
       abi:
@@ -77,7 +81,7 @@ jobs:
               "$SOURCES_URL" -o generated-sources.zip
           fi
           unzip -q generated-sources.zip -d generated-sources
-          for dir in gen gen_server gen_d3dx gen_abk; do
+          for dir in gen gen_server gen_d3dx; do
             if [ ! -d "generated-sources/src/recomp/$dir" ]; then
               echo "::error::Archive is missing src/recomp/$dir"
               exit 1
@@ -87,7 +91,52 @@ jobs:
           cp -a generated-sources/src/recomp/gen nfsmw/src/recomp/
           cp -a generated-sources/src/recomp/gen_server nfsmw/src/recomp/
           cp -a generated-sources/src/recomp/gen_d3dx nfsmw/src/recomp/
-          cp -a generated-sources/src/recomp/gen_abk nfsmw/src/recomp/
+
+      - name: Generate lifted ABK sound-bank module
+        env:
+          ABK_INPUTS_URL: ${{ inputs.abk_inputs_url }}
+          ABK_INPUTS_TOKEN: ${{ secrets.ANDROID_BUILD_INPUTS_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "$ABK_INPUTS_URL" in
+            https://*) ;;
+            *) echo "::error::abk_inputs_url must use HTTPS"; exit 1 ;;
+          esac
+          if [ -n "${ABK_INPUTS_TOKEN:-}" ]; then
+            curl --fail --location --retry 3 --retry-delay 2 \
+              -H "Authorization: Bearer $ABK_INPUTS_TOKEN" \
+              "$ABK_INPUTS_URL" -o abk-inputs.zip
+          else
+            curl --fail --location --retry 3 --retry-delay 2 \
+              "$ABK_INPUTS_URL" -o abk-inputs.zip
+          fi
+          unzip -q abk-inputs.zip -d abk-inputs
+
+          analysis_dll="$(find abk-inputs -type f -name analysis.dll -print -quit)"
+          seeds_json="$(find abk-inputs -type f -name seeds.json -print -quit)"
+          blocks_c="$(find abk-inputs -type f -name blocks.c -print -quit)"
+          for input in "$analysis_dll" "$seeds_json" "$blocks_c"; do
+            if [ -z "$input" ] || [ ! -s "$input" ]; then
+              echo "::error::ABK input ZIP must contain non-empty analysis.dll, seeds.json and blocks.c"
+              exit 1
+            fi
+          done
+
+          mkdir -p nfsmw/work/abk nfsmw/src/recomp/gen_abk
+          cp "$blocks_c" nfsmw/src/recomp/gen_abk/abk_blocks.c
+
+          python3 -m venv "$RUNNER_TEMP/abk-lift-venv"
+          ABK_PY="$RUNNER_TEMP/abk-lift-venv/bin/python"
+          "$ABK_PY" -m pip install --disable-pip-version-check capstone pefile
+          "$ABK_PY" nfsmw/scripts/run_lift.py catalog \
+            "$analysis_dll" "$seeds_json" nfsmw/work/abk/catalog.json
+          "$ABK_PY" nfsmw/scripts/run_lift.py lift \
+            "$analysis_dll" nfsmw/work/abk/catalog.json nfsmw/src/recomp/gen_abk \
+            --prefix abk_
+          test -s nfsmw/src/recomp/gen_abk/abk_recomp_funcs.h
+          test -s nfsmw/src/recomp/gen_abk/abk_recomp_dispatch.c
+          test -s nfsmw/src/recomp/gen_abk/abk_blocks.c
+          compgen -G 'nfsmw/src/recomp/gen_abk/abk_recomp_*.c' >/dev/null
 
       - name: Prepare shared DXVK Android backend
         working-directory: nfsu2-recompiled
