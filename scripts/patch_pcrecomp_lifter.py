@@ -72,7 +72,7 @@ def main() -> None:
 """
     source = replace_once(source, old_loop, new_loop, "loop-family target handling and ZF semantics")
 
-    path.write_text(source, encoding="utf-8")
+    compile(source, str(path), "exec")  # fail before writing if the patch creates invalid Python\n    path.write_text(source, encoding="utf-8")
     print(f"[ok] Android branch-safety patch applied to {path}")
 
 
