@@ -50,7 +50,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: codepdbh/nfsu2-recompiled
-          path: nfsu2-recompiled      
+          path: nfsu2-recompiled
+
       - name: Apply shared pcrecomp patches
         run: |
           set -euo pipefail
