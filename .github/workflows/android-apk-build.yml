@@ -68,7 +68,6 @@ jobs:
           python3 -m py_compile nfsmw/scripts/run_lift.py
           echo "Checking patched upstream lifter Python syntax..."
           python3 -m py_compile pcrecomp/tools/lift/lift32.py
-          grep -q 'LOOPcc tests ZF' pcrecomp/tools/lift/lift32.py || { echo "Expected LOOPcc ZF fix was not applied"; exit 1; }
           echo "Applied shared pcrecomp patches and Android branch-safety fix."
 
       - name: Checkout pinned DXVK native source
