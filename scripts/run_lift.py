@@ -171,9 +171,14 @@ def validate_local_gotos(code, address):
     if missing:
         formatted = ", ".join(missing[:12])
         more = f" (+{len(missing) - 12} more)" if len(missing) > 12 else ""
+        bad_lines = [
+            line.strip() for line in code.splitlines()
+            if any(f"goto {label};" in line for label in missing)
+        ]
+        context = " | ".join(bad_lines[:8])
         raise RuntimeError(
             f"Function 0x{address:08X} has unresolved local goto label(s): "
-            f"{formatted}{more}"
+            f"{formatted}{more}. Emitted branch: {context}"
         )
 
 
@@ -271,6 +276,17 @@ def cmd_lift(exe, catalog, outdir, split=400, names_path=None, prefix="", extra_
             print(f"[*] {n + 1}/{len(fds)} lifted ({el:.0f}s)", flush=True)
     flush()
 
+    external_targets = sorted(getattr(lifter, "external_branch_targets", set()))
+    missing_dispatch = [target for target in external_targets if target not in lifted]
+    if missing_dispatch:
+        formatted = ", ".join(f"0x{target:08X}" for target in missing_dispatch[:32])
+        more = f" (+{len(missing_dispatch) - 32} more)" if len(missing_dispatch) > 32 else ""
+        raise RuntimeError(
+            "External direct branch target(s) are not present in the module dispatch "
+            f"catalog: {formatted}{more}. Branch-target discovery must produce a "
+            "dispatchable alias before this source set can be built."
+        )
+
     with open(os.path.join(outdir, f"{prefix}recomp_funcs.h"), "w", newline="\n") as fh:
         fh.write("/* AUTO-GENERATED. DO NOT EDIT. */\n#pragma once\n#include <stdint.h>\n")
         for a in entries:
@@ -292,6 +308,8 @@ def cmd_lift(exe, catalog, outdir, split=400, names_path=None, prefix="", extra_
 
     out = {"functions": len(entries), "files": idx, "c_lines": lines_total,
            "lift_failures": len(failed), "failures": failed[:200],
+           "external_branch_gotos_routed": getattr(lifter, "external_branch_gotos", 0),
+           "external_branch_targets": [f"0x{target:08X}" for target in external_targets],
            "unimplemented_total": sum(unimpl.values()),
            "unimplemented": dict(unimpl.most_common()),
            "unimplemented_sites": dict(unimpl_sites),
