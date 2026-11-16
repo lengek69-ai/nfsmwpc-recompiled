@@ -2,8 +2,9 @@
 """Apply Android branch-safety fixes to the pinned pcrecomp checkout.
 
 The local lifter patch routes direct branches that leave the current function
-through the recompilation dispatcher. The disassembler patch also promotes
-unclaimed conditional-branch destinations to dispatchable catalog entries.
+through the recompilation dispatcher. The disassembler patch discovers
+conditional destinations and restores surviving direct-branch targets as
+alias entries after overlap pruning.
 """
 from pathlib import Path
 import sys
@@ -83,6 +84,54 @@ def patch_disassembler(path: Path) -> None:
     source = replace_once(
         source, old, new,
         "harvest direct conditional-branch targets into the dispatch catalog",
+    )
+
+    old_prune = """        for a in list(functions):
+            if a not in sizes:
+                del functions[a]
+
+        # An entry on int3 is alignment padding that a pointer-shaped constant
+"""
+    new_prune = """        for a in list(functions):
+            if a not in sizes:
+                del functions[a]
+
+        # A direct branch is stronger evidence than an overlapping decode from
+        # a different candidate. The lifter must be able to dispatch to the exact
+        # target, even when another decode stream marked that byte as interior.
+        # Rebuild only targets reached by functions that survived the overlap
+        # filter, so a discarded false-positive body cannot preserve its targets.
+        direct_branch_sources = {}
+        for source, function in functions.items():
+            local_blocks = set(function.blocks)
+            for block in function.blocks.values():
+                for ins in block.instructions:
+                    if not ins.is_jump:
+                        continue
+                    target = ins.get_branch_target()
+                    if (target is None or target in local_blocks
+                            or not code_start <= target < code_end):
+                        continue
+                    direct_branch_sources.setdefault(target, set()).add(source)
+
+        restored = 0
+        for target, sources in sorted(direct_branch_sources.items()):
+            if target in functions or not any(source in functions for source in sources):
+                continue
+            alias = self.disassemble_function(target, iat_map)
+            if alias and alias.blocks:
+                alias.entry_kind = "alias"
+                functions[target] = alias
+                restored += 1
+
+        if restored:
+            print(f"[*] Restored {restored} direct branch destinations as aliases")
+
+        # An entry on int3 is alignment padding that a pointer-shaped constant
+"""
+    source = replace_once(
+        source, old_prune, new_prune,
+        "restore surviving direct branch destinations after overlap pruning",
     )
     compile(source, str(path), "exec")
     path.write_text(source, encoding="utf-8")
