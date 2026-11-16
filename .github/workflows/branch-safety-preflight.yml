@@ -1,0 +1,56 @@
+name: Branch Safety Preflight
+
+on:
+  push:
+    branches:
+      - feature/modloader-file-overlay
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  branch-safety:
+    name: Validate pcrecomp branch routing
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Most Wanted
+        uses: actions/checkout@v4
+        with:
+          path: nfsmw
+
+      - name: Checkout pinned pcrecomp
+        uses: actions/checkout@v4
+        with:
+          repository: sp00nznet/pcrecomp
+          ref: 35548b8d0fd8aa853da67edcf7cd6134f6b9cdc7
+          path: pcrecomp
+
+      - name: Checkout pinned shared pcrecomp patches
+        uses: actions/checkout@v4
+        with:
+          repository: codepdbh/nfsu2-recompiled
+          ref: defb614e6b636a69b6b2f3ee2bca43f0e54bd38e
+          path: nfsu2-recompiled
+
+      - name: Apply shared patches and project branch-safety fixes
+        run: |
+          set -euo pipefail
+          git -C pcrecomp -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            am "$GITHUB_WORKSPACE"/nfsu2-recompiled/patches/pcrecomp/*.patch
+          python3 nfsmw/scripts/patch_pcrecomp_lifter.py \
+            pcrecomp/tools/lift/lift32.py pcrecomp/tools/disasm/disasm32.py
+
+      - name: Run branch-routing unit tests
+        run: python3 nfsmw/scripts/test_mw_lifter.py
+
+      - name: Compile-check project and patched Python sources
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            nfsmw/scripts/patch_pcrecomp_lifter.py \
+            nfsmw/scripts/mw_lifter.py \
+            nfsmw/scripts/run_lift.py \
+            pcrecomp/tools/lift/lift32.py \
+            pcrecomp/tools/disasm/disasm32.py
