@@ -76,22 +76,23 @@ class ExternalBranchRoutingTests(unittest.TestCase):
 
 class DisassemblerBranchCatalogPatchTests(unittest.TestCase):
     def test_restores_surviving_direct_branch_targets_after_overlap_pruning(self):
-        source = """def sample(self):
-    for ins in []:
-        if not (ins.is_uncond_jump or ins.is_call):
-            continue
+        source = """class Disassembler:
+    def sample(self):
+        for ins in []:
+            if not (ins.is_uncond_jump or ins.is_call):
+                continue
 
-    functions = {}
-    sizes = {}
-    code_start = 0
-    code_end = 16
-    iat_map = {}
-    for a in list(functions):
-        if a not in sizes:
-            del functions[a]
+        functions = {}
+        sizes = {}
+        code_start = 0
+        code_end = 16
+        iat_map = {}
+        for a in list(functions):
+            if a not in sizes:
+                del functions[a]
 
-    # An entry on int3 is alignment padding that a pointer-shaped constant
-    pass
+        # An entry on int3 is alignment padding that a pointer-shaped constant
+        pass
 """
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "disasm32.py"
