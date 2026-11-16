@@ -295,10 +295,10 @@ def cmd_lift(exe, catalog, outdir, split=400, names_path=None, prefix="", extra_
                     f"{site['mnemonic']} {site['operands']} bytes={site['bytes']} "
                     f"labels={site['labels_count']}"
                 )
-        details = "\\n".join(origins[:48]) if origins else "No source-site metadata recorded."
+        details = "\n".join(origins[:48]) if origins else "No source-site metadata recorded."
         raise RuntimeError(
             "External direct branch target(s) are not present in the module dispatch "
-            f"catalog: {formatted}{more}. Source instruction(s):\\n{details}"
+            f"catalog: {formatted}{more}. Source instruction(s):\n{details}"
         )
 
     with open(os.path.join(outdir, f"{prefix}recomp_funcs.h"), "w", newline="\n") as fh:
