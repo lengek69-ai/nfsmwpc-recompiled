@@ -61,14 +61,18 @@ jobs:
             am "$GITHUB_WORKSPACE"/nfsu2-recompiled/patches/pcrecomp/*.patch
           grep -q 'hook_sites: set' pcrecomp/tools/lift/lift32.py
           grep -q '#define RECOMP_HOOK' pcrecomp/runtime/recomp32/recomp_types.h
-          python3 nfsmw/scripts/patch_pcrecomp_lifter.py pcrecomp/tools/lift/lift32.py
-          echo "Checking patcher Python syntax..."
+          python3 nfsmw/scripts/patch_pcrecomp_lifter.py \
+            pcrecomp/tools/lift/lift32.py pcrecomp/tools/disasm/disasm32.py
+          echo "Checking project-local branch-routing tests..."
+          python3 nfsmw/scripts/test_mw_lifter.py
+          echo "Checking patcher and lift-driver Python syntax..."
           python3 -m py_compile nfsmw/scripts/patch_pcrecomp_lifter.py
-          echo "Checking lift-driver Python syntax..."
           python3 -m py_compile nfsmw/scripts/run_lift.py
-          echo "Checking patched upstream lifter Python syntax..."
+          python3 -m py_compile nfsmw/scripts/mw_lifter.py
+          echo "Checking patched upstream lifter and disassembler syntax..."
           python3 -m py_compile pcrecomp/tools/lift/lift32.py
-          echo "Applied shared pcrecomp patches and Android branch-safety fix."
+          python3 -m py_compile pcrecomp/tools/disasm/disasm32.py
+          echo "Applied shared pcrecomp patches and direct-branch catalog safety fix."
 
       - name: Checkout pinned DXVK native source
         uses: actions/checkout@v4
