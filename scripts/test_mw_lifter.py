@@ -14,6 +14,7 @@ sys.modules.setdefault("lift32", stub)
 
 from mw_lifter import route_external_local_gotos
 from patch_pcrecomp_lifter import patch_disassembler
+from branch_catalog import restore_late_branch_targets
 
 
 class ExternalBranchRoutingTests(unittest.TestCase):
@@ -113,6 +114,70 @@ class DisassemblerBranchCatalogPatchTests(unittest.TestCase):
             # Reapplying the patch must be safe for both pinned and newer trees.
             patch_disassembler(path)
             self.assertEqual(path.read_text(encoding="utf-8"), patched)
+
+
+class LateBranchCatalogRecoveryTests(unittest.TestCase):
+    class Instruction:
+        def __init__(self, target):
+            self.is_jump = True
+            self.op_str = f"0x{target:08X}"
+
+        def get_branch_target(self):
+            # Simulate find_functions(..., release_operands=True).
+            return None
+
+    class Block:
+        def __init__(self, *instructions):
+            self.instructions = list(instructions)
+
+    class Function:
+        def __init__(self, address, *targets):
+            self.address = address
+            self.blocks = {
+                address: LateBranchCatalogRecoveryTests.Block(
+                    *(LateBranchCatalogRecoveryTests.Instruction(t) for t in targets)
+                )
+            }
+            self.entry_kind = "start"
+
+    class Disassembler:
+        def __init__(self, functions):
+            self.functions = functions
+
+        def disassemble_function(self, address, _iat_map):
+            return self.functions.get(address)
+
+    def test_recovers_recursive_targets_from_late_seed_functions(self):
+        source = self.Function(0x1000, 0x2000)
+        first_alias = self.Function(0x2000, 0x3000)
+        second_alias = self.Function(0x3000)
+        dis = self.Disassembler({0x2000: first_alias, 0x3000: second_alias})
+        functions = {source.address: source}
+
+        restored = restore_late_branch_targets(dis, {}, functions, 0x1000, 0x4000)
+
+        self.assertEqual(restored, [0x2000, 0x3000])
+        self.assertEqual(functions[0x2000].entry_kind, "alias")
+        self.assertEqual(functions[0x3000].entry_kind, "alias")
+
+    def test_keeps_branches_to_local_blocks_inside_the_function(self):
+        source = self.Function(0x1000, 0x1004)
+        source.blocks[0x1004] = self.Block()
+        dis = self.Disassembler({})
+        functions = {source.address: source}
+
+        restored = restore_late_branch_targets(dis, {}, functions, 0x1000, 0x4000)
+
+        self.assertEqual(restored, [])
+        self.assertEqual(set(functions), {0x1000})
+
+    def test_fails_clearly_when_a_direct_target_cannot_be_decoded(self):
+        source = self.Function(0x1000, 0x2000)
+        dis = self.Disassembler({})
+        functions = {source.address: source}
+
+        with self.assertRaisesRegex(RuntimeError, "0x00002000"):
+            restore_late_branch_targets(dis, {}, functions, 0x1000, 0x4000)
 
 
 if __name__ == "__main__":
