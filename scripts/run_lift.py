@@ -30,6 +30,7 @@ for sub in ("pe", "disasm", "lift"):
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32  # noqa: E402
 from pe_analyze import analyze_pe, build_iat_map   # noqa: E402
 import disasm32                                     # noqa: E402
+from branch_catalog import restore_late_branch_targets  # noqa: E402
 from disasm32 import Disassembler, Function, BasicBlock, Instruction  # noqa: E402
 
 
@@ -118,6 +119,11 @@ def cmd_catalog(exe, seeds_path, out, seeds_only=False):
         function.entry_kind = 'start'
         funcs[address] = function
         pending.extend(function.calls_to)
+    late_aliases = restore_late_branch_targets(
+        dis, iat, funcs, info.code_start, info.code_end
+    )
+    if late_aliases:
+        print(f"[*] Restored {len(late_aliases)} late seed branch destinations as aliases")
     doc = {"exe": os.path.basename(exe), "image_base": info.image_base,
            "code_start": info.code_start, "code_end": info.code_end,
            "functions": []}
