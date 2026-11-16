@@ -70,7 +70,7 @@ class Lifter(BaseLifter):
                 "mnemonic": insn.mnemonic,
                 "operands": insn.op_str,
                 "bytes": bytes(insn.bytes).hex(),
-                "local_labels": sorted(labels) if labels is not None else None,
+                "labels_count": len(labels) if labels is not None else None,
             })
         lines, routed = route_external_local_gotos(lines, target, labels)
         self.external_branch_gotos += routed
