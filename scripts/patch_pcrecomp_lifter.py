@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Apply the Android-specific local-branch safety fix to the pinned pcrecomp lifter.
+"""Apply Android branch-safety fixes to the pinned pcrecomp checkout.
 
-The upstream lifter already handles missing labels for jcc and jmp, but its
-jecxz/jcxz and loop-family emitters previously generated unconditional local
-gotos. When the target is not part of the current function CFG, Clang rejects
-the generated C with an undeclared-label error. Route those taken branches
-through the recompilation dispatcher instead.
+The local lifter patch routes direct branches that leave the current function
+through the recompilation dispatcher. The disassembler patch also promotes
+unclaimed conditional-branch destinations to dispatchable catalog entries.
 """
 from pathlib import Path
 import sys
@@ -24,14 +22,9 @@ def replace_once(source: str, old: str, new: str, description: str) -> str:
     return source.replace(old, new, 1)
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        raise SystemExit(f"Usage: {Path(sys.argv[0]).name} path/to/pcrecomp/tools/lift/lift32.py")
-
-    path = Path(sys.argv[1])
+def patch_lifter(path: Path) -> None:
     if not path.is_file():
         raise SystemExit(f"pcrecomp lifter not found: {path}")
-
     source = path.read_text(encoding="utf-8")
 
     old_jcxz = """            if t is not None:
@@ -45,7 +38,7 @@ def main() -> None:
                 else:
                     lines.append(f"if ({reg} == 0) goto L_{t:08X}; {comment}")
 
-        elif m in ('loop', 'loope', 'loopne'):
+        elif m in ('loop', 'loope', 'loopz', 'loopne', 'loopnz'):
 """
     source = replace_once(source, old_jcxz, new_jcxz, "jecxz/jcxz external-target handling")
 
@@ -57,10 +50,14 @@ def main() -> None:
         elif m == 'scasd':
 """
     new_loop = """            t = ops[0].imm if ops and ops[0].type == X86_OP_IMM else None
-            # LOOPcc tests ZF, not CF. Reuse the same lazy-flag evaluator as
-            # JE/JNE so loope and loopne preserve x86 condition semantics.
-            extra = {'loop': '', 'loope': f" && ({self._make_condition('je')})",
-                     'loopne': f" && ({self._make_condition('jne')})"}[m]
+            # LOOPcc tests ZF, not CF. Reuse the lazy-flag evaluator as JE/JNE.
+            extra = {
+                'loop': '',
+                'loope': f" && ({self._make_condition('je')})",
+                'loopz': f" && ({self._make_condition('je')})",
+                'loopne': f" && ({self._make_condition('jne')})",
+                'loopnz': f" && ({self._make_condition('jne')})",
+            }[m]
             if t is not None:
                 condition = f"--ecx != 0{extra}"
                 if self._labels is not None and t not in self._labels:
@@ -70,10 +67,35 @@ def main() -> None:
 
         elif m == 'scasd':
 """
-    source = replace_once(source, old_loop, new_loop, "loop-family target handling and ZF semantics")
+    source = replace_once(source, old_loop, new_loop, "LOOPcc aliases, ZF semantics and external-target handling")
 
-    compile(source, str(path), "exec")  # fail before writing if the patch creates invalid Python\n    path.write_text(source, encoding="utf-8")
-    print(f"[ok] Android branch-safety patch applied to {path}")
+    compile(source, str(path), "exec")
+    path.write_text(source, encoding="utf-8")
+    print(f"[ok] lifter patch applied to {path}")
+
+
+def patch_disassembler(path: Path) -> None:
+    if not path.is_file():
+        raise SystemExit(f"pcrecomp disassembler not found: {path}")
+    source = path.read_text(encoding="utf-8")
+    old = "if not (ins.is_uncond_jump or ins.is_call):"
+    new = "if not (ins.is_jump or ins.is_call):"
+    source = replace_once(
+        source, old, new,
+        "harvest direct conditional-branch targets into the dispatch catalog",
+    )
+    compile(source, str(path), "exec")
+    path.write_text(source, encoding="utf-8")
+    print(f"[ok] disassembler patch applied to {path}")
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        raise SystemExit(
+            f"Usage: {Path(sys.argv[0]).name} path/to/lift32.py path/to/disasm32.py"
+        )
+    patch_lifter(Path(sys.argv[1]))
+    patch_disassembler(Path(sys.argv[2]))
 
 
 if __name__ == "__main__":
