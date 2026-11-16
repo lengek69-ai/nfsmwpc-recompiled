@@ -48,6 +48,8 @@ class Lifter(BaseLifter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.external_branch_targets = set()
+        self.external_branch_sites = {}
+        self.current_function_address = None
         self.external_branch_gotos = 0
 
     def lift_instruction(self, insn):
@@ -62,6 +64,14 @@ class Lifter(BaseLifter):
         labels = getattr(self, "_labels", None)
         if labels is None or target not in labels:
             self.external_branch_targets.add(target)
+            self.external_branch_sites.setdefault(target, []).append({
+                "function": self.current_function_address,
+                "instruction": insn.address,
+                "mnemonic": insn.mnemonic,
+                "operands": insn.op_str,
+                "bytes": bytes(insn.bytes).hex(),
+                "local_labels": sorted(labels) if labels is not None else None,
+            })
         lines, routed = route_external_local_gotos(lines, target, labels)
         self.external_branch_gotos += routed
         return lines
