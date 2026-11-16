@@ -252,11 +252,14 @@ def cmd_lift(exe, catalog, outdir, split=400, names_path=None, prefix="", extra_
                 stats["excluded"] += 1
             else:
                 f = rebuild(md, img, base, fd)
+                lifter.current_function_address = a
                 code = lifter.lift_function(f)
         except Exception as ex:  # noqa: BLE001
             failed.append((a, repr(ex)))
             code = (f"/* LIFT FAILED: {ex!r} */\n"
                     f"void sub_{a:08X}(void) {{ RECOMP_UNIMPL(0x{a:08X}u, \"lift failed\"); }}")
+        finally:
+            lifter.current_function_address = None
         validate_local_gotos(code, a)
         for line in code.splitlines():
             if "RECOMP_UNIMPL(" in line:
@@ -281,10 +284,21 @@ def cmd_lift(exe, catalog, outdir, split=400, names_path=None, prefix="", extra_
     if missing_dispatch:
         formatted = ", ".join(f"0x{target:08X}" for target in missing_dispatch[:32])
         more = f" (+{len(missing_dispatch) - 32} more)" if len(missing_dispatch) > 32 else ""
+        origins = []
+        for target in missing_dispatch[:32]:
+            for site in getattr(lifter, "external_branch_sites", {}).get(target, [])[:4]:
+                fn = site.get("function")
+                fn_text = f"0x{fn:08X}" if isinstance(fn, int) else "unknown"
+                origins.append(
+                    f"target=0x{target:08X} from function={fn_text} "
+                    f"instruction=0x{site['instruction']:08X} "
+                    f"{site['mnemonic']} {site['operands']} bytes={site['bytes']} "
+                    f"labels={site['labels_count']}"
+                )
+        details = "\\n".join(origins[:48]) if origins else "No source-site metadata recorded."
         raise RuntimeError(
             "External direct branch target(s) are not present in the module dispatch "
-            f"catalog: {formatted}{more}. Branch-target discovery must produce a "
-            "dispatchable alias before this source set can be built."
+            f"catalog: {formatted}{more}. Source instruction(s):\\n{details}"
         )
 
     with open(os.path.join(outdir, f"{prefix}recomp_funcs.h"), "w", newline="\n") as fh:
